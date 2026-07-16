@@ -11,11 +11,41 @@ function safeEqual(a: string, b: string): boolean {
   return A.length === B.length && timingSafeEqual(A, B);
 }
 
-async function sendTelegramMessage(botToken: string, chatId: number, text: string) {
+// ── Suggestion buttons ────────────────────────────────────────────────────────
+// Each inner array is a row of buttons; put 1–2 per row for mobile readability.
+const SUGGESTION_KEYBOARD = {
+  keyboard: [
+    ["🗺️ What services do you offer?"],
+    ["📍 Where are you located?"],
+    ["💰 What are your pricing plans?"],
+    ["📞 How can I contact you?"],
+    ["🎓 Do you offer training?"],
+    ["🤝 How do I get started?"],
+  ],
+  resize_keyboard: true,       // compact layout on mobile
+  one_time_keyboard: false,    // keep keyboard visible after each tap
+  input_field_placeholder: "Tap a button or type your question…",
+};
+
+function buildReplyMarkup() {
+  return JSON.stringify(SUGGESTION_KEYBOARD);
+}
+
+async function sendTelegramMessage(
+  botToken: string,
+  chatId: number,
+  text: string,
+  replyMarkup?: string,
+) {
   await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      parse_mode: "Markdown",
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    }),
   });
 }
 
@@ -102,21 +132,30 @@ export const Route = createFileRoute("/api/public/telegram/webhook")({
           .maybeSingle();
         if (existing) return Response.json({ ok: true, duplicate: true });
 
+        const keyboard = buildReplyMarkup();
+
         let reply = "";
         try {
           if (!text) {
             reply = "I can only understand text messages right now. Please type your question.";
+            await sendTelegramMessage(botToken, chatId, reply, keyboard);
+          } else if (text.trim() === "/start") {
+            reply =
+              "👋 Welcome to *GIS Consultancy Assistant*!\n\n" +
+              "I can answer your questions about our services, locations, pricing, and more.\n\n" +
+              "Tap one of the quick buttons below or type your own question to get started:";
+            await sendTelegramMessage(botToken, chatId, reply, keyboard);
           } else {
             const { data: kb } = await supabaseAdmin
               .from("kb_entries")
               .select("title, content");
             reply = await generateReply(text, kb ?? []);
+            await sendTelegramMessage(botToken, chatId, reply, keyboard);
           }
-          await sendTelegramMessage(botToken, chatId, reply);
         } catch (err) {
           console.error("Webhook handler error:", err);
           reply = "Something went wrong. Please try again in a moment.";
-          try { await sendTelegramMessage(botToken, chatId, reply); } catch {}
+          try { await sendTelegramMessage(botToken, chatId, reply, keyboard); } catch {}
         }
 
         await supabaseAdmin.from("telegram_messages").insert({
